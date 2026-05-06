@@ -1,0 +1,722 @@
+<html lang="en"><head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>D3 · SL4 Live Bus Tracker | TfL</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    :root {
+      --bg:       #0d1117;
+      --card:     #161b22;
+      --panel:    rgba(13,17,23,0.96);
+      --bdr:      #30363d;
+      --txt:      #e6edf3;
+      --muted:    #8b949e;
+      --d3:       #e32017;
+      --d3-dark:  #9b1c1c;
+      --sl4:      #00b2a9;
+      --sl4-dark: #007b74;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg); color: var(--txt);
+      height: 100vh; overflow: hidden;
+      display: flex; flex-direction: column;
+    }
+
+    /* ── Header ── */
+    #hdr {
+      background: #111820;
+      border-bottom: 1px solid var(--bdr);
+      padding: 11px 18px;
+      display: flex; align-items: center; gap: 12px; flex-shrink: 0;
+    }
+    .pills { display: flex; align-items: center; gap: 7px; }
+    .pill {
+      font-size: 20px; font-weight: 900;
+      padding: 4px 13px; border-radius: 6px; line-height: 1.3;
+      letter-spacing: .5px; color: #fff;
+    }
+    .pill-d3  { background: var(--d3); }
+    .pill-sl4 { background: var(--sl4); }
+    .plus { color: var(--muted); font-size: 18px; font-weight: 300; }
+    .hdr-mid { flex: 1; padding-left: 4px; }
+    .hdr-mid h1 { font-size: 16px; font-weight: 600; }
+    .hdr-mid p  { font-size: 11px; color: var(--muted); margin-top: 1px; }
+    .hdr-right  { text-align: right; }
+    #clock { font-size: 16px; font-weight: 700; }
+    .hdr-right small { color: var(--muted); font-size: 11px; }
+
+    /* ── Status bar ── */
+    #sbar {
+      background: var(--card); border-bottom: 1px solid var(--bdr);
+      padding: 5px 18px; display: flex; align-items: center;
+      gap: 14px; font-size: 12px; flex-shrink: 0;
+    }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: #3fb950; animation: blink 2s infinite; }
+    .dot.err { background: #f85149; animation: none; }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.2} }
+    .rcnt {
+      display: flex; align-items: center; gap: 5px;
+      background: rgba(255,255,255,.05); padding: 2px 9px; border-radius: 10px;
+    }
+    .rcnt-dot { width: 8px; height: 8px; border-radius: 2px; }
+    #sbar .r { margin-left: auto; color: var(--muted); }
+
+    /* ── Map container ── */
+    #wrap { flex: 1; position: relative; overflow: hidden; }
+    #map  { height: 100%; width: 100%; }
+
+    /* ── Side panel ── */
+    #panel {
+      position: absolute; top: 10px; right: 10px;
+      width: 268px; max-height: calc(100% - 20px);
+      background: var(--panel); border: 1px solid var(--bdr);
+      border-radius: 12px; backdrop-filter: blur(14px);
+      z-index: 1000; display: flex; flex-direction: column; overflow: hidden;
+    }
+    #panel-top {
+      padding: 11px 13px 0; border-bottom: 1px solid var(--bdr); flex-shrink: 0;
+    }
+    .panel-title-row {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 9px; font-size: 13px; font-weight: 600;
+    }
+    .total-badge {
+      background: rgba(255,255,255,.08); padding: 1px 9px;
+      border-radius: 10px; font-size: 11px; color: var(--muted);
+    }
+
+    /* Filter tabs */
+    #filters { display: flex; gap: 3px; }
+    .ftab {
+      flex: 1; padding: 6px 4px; text-align: center;
+      font-size: 12px; font-weight: 600; cursor: pointer;
+      border-radius: 6px 6px 0 0;
+      border: 1px solid transparent; border-bottom: none;
+      color: var(--muted); background: transparent;
+      transition: color .15s, background .15s;
+    }
+    .ftab:hover { color: var(--txt); }
+    .ftab.active {
+      color: var(--txt); background: var(--card);
+      border-color: var(--bdr);
+    }
+    .ftab.active.f-all { border-top: 2px solid #58a6ff; }
+    .ftab.active.f-d3  { border-top: 2px solid var(--d3); }
+    .ftab.active.f-sl4 { border-top: 2px solid var(--sl4); }
+
+    /* Bus list */
+    #bus-list { overflow-y: auto; flex: 1; padding: 8px; }
+
+    /* Section dividers */
+    .sdiv {
+      font-size: 10px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: .8px; color: var(--muted);
+      padding: 6px 3px 4px; margin-top: 3px;
+      display: flex; align-items: center; gap: 7px;
+    }
+    .sdiv:first-child { padding-top: 2px; margin-top: 0; }
+    .sdiv-line { height: 2px; flex: 1; border-radius: 1px; opacity: .6; }
+
+    /* Bus cards */
+    .card {
+      background: var(--card); border: 1px solid var(--bdr);
+      border-radius: 8px; padding: 9px 11px; margin-bottom: 5px;
+      cursor: pointer; transition: background .15s, border-color .15s;
+    }
+    .card:hover { background: #1c2128; }
+    .card.d3-card:hover  { border-color: var(--d3); }
+    .card.sl4-card:hover { border-color: var(--sl4); }
+    .card-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 3px; }
+    .card-id-row { display: flex; align-items: center; gap: 6px; }
+    .rbadge {
+      font-size: 10px; font-weight: 800; padding: 2px 7px;
+      border-radius: 4px; letter-spacing: .5px; color: #fff;
+    }
+    .rb-d3  { background: var(--d3); }
+    .rb-sl4 { background: var(--sl4); }
+    .vid { font-weight: 700; font-size: 14px; }
+    .dbadge {
+      font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 4px;
+    }
+    .in-d3   { background: rgba(227,32,23,.15);  color: #ff6b6b; border: 1px solid rgba(227,32,23,.4); }
+    .out-d3  { background: rgba(155,28,28,.2);   color: #ffaaaa; border: 1px solid rgba(155,28,28,.4); }
+    .in-sl4  { background: rgba(0,178,169,.15);  color: #4dd0e1; border: 1px solid rgba(0,178,169,.4); }
+    .out-sl4 { background: rgba(0,123,116,.2);   color: #80cbc4; border: 1px solid rgba(0,123,116,.4); }
+    .cdest { font-size: 12px; color: var(--muted); margin: 2px 0; }
+    .cstop { font-size: 12px; color: #58a6ff; }
+    .ceta  { font-size: 12px; font-weight: 600; margin-top: 3px; }
+    .cloc  { font-size: 10px; color: var(--muted); margin-top: 2px; }
+    .eta-due  { color: #f85149; }
+    .eta-soon { color: #e3b341; }
+    .eta-ok   { color: #3fb950; }
+
+    /* Legend */
+    #legend {
+      position: absolute; bottom: 28px; left: 10px;
+      background: var(--panel); border: 1px solid var(--bdr);
+      border-radius: 9px; padding: 10px 14px;
+      font-size: 12px; z-index: 1000; backdrop-filter: blur(10px);
+    }
+    #legend .lhdr {
+      font-size: 10px; font-weight: 600; color: var(--muted);
+      text-transform: uppercase; letter-spacing: .5px; margin-bottom: 7px;
+    }
+    #legend .lr { display: flex; align-items: center; gap: 7px; margin-bottom: 4px; }
+    .li { width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0; }
+    .si { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+          border: 2px solid #555; }
+
+    /* Loading overlay */
+    #ov {
+      position: absolute; inset: 0; background: rgba(13,17,23,.9);
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 11px; z-index: 2000;
+    }
+    .spin {
+      width: 42px; height: 42px;
+      border: 3px solid var(--bdr);
+      border-top-color: var(--d3);
+      border-right-color: var(--sl4);
+      border-radius: 50%;
+      animation: spin .9s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #ov p   { font-size: 14px; }
+    #ov small { color: var(--muted); font-size: 11px; }
+
+    /* Popup theming */
+    .leaflet-popup-content-wrapper {
+      background: var(--card) !important; color: var(--txt) !important;
+      border: 1px solid var(--bdr) !important; border-radius: 10px !important;
+      box-shadow: 0 4px 24px rgba(0,0,0,.75) !important;
+    }
+    .leaflet-popup-tip { background: var(--card) !important; }
+    .leaflet-popup-content { margin: 13px 15px !important; font-size: 13px; line-height: 1.5; }
+    .pt { font-size: 15px; font-weight: 700; margin-bottom: 6px; display: flex; align-items: center; gap: 8px; }
+    .pr { margin: 3px 0; color: #c9d1d9; }
+    .pr b { color: var(--txt); }
+    .psh { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); margin: 8px 0 4px; }
+    .ps  { padding: 2px 0; font-size: 12px; }
+
+    /* Empty state */
+    .empty { text-align: center; padding: 24px 12px; color: var(--muted); font-size: 13px; }
+    .empty small { opacity: .65; display: block; margin-top: 4px; font-size: 11px; }
+  </style>
+</head>
+<body>
+
+<!-- ═══ HEADER ═══ -->
+<div id="hdr">
+  <div class="pills">
+    <div class="pill pill-d3">D3</div>
+    <span class="plus">+</span>
+    <div class="pill pill-sl4">SL4</div>
+  </div>
+  <div class="hdr-mid">
+    <h1>Live Bus Tracker</h1>
+    <p>Transport for London — Real-time positions</p>
+  </div>
+  <div class="hdr-right">
+    <div id="clock">--:--:--</div>
+    <small>London, UK</small>
+  </div>
+</div>
+
+<!-- ═══ STATUS BAR ═══ -->
+<div id="sbar">
+  <div class="dot" id="dot"></div>
+  <span id="stxt">Connecting to TfL…</span>
+  <span style="color:var(--bdr)">|</span>
+  <div class="rcnt">
+    <div class="rcnt-dot" style="background:var(--d3)"></div>
+    D3: <strong id="cnt-d3" style="color:#ff6b6b">--</strong>
+  </div>
+  <div class="rcnt">
+    <div class="rcnt-dot" style="background:var(--sl4)"></div>
+    SL4: <strong id="cnt-sl4" style="color:#4dd0e1">--</strong>
+  </div>
+  <span style="color:var(--muted)">Updated: <span id="upd" style="color:var(--txt)">--:--:--</span></span>
+  <span class="r">⟳ auto-refresh 30 s</span>
+</div>
+
+<!-- ═══ MAP ═══ -->
+<div id="wrap">
+  <div id="map"></div>
+
+  <!-- Loading overlay -->
+  <div id="ov">
+    <div class="spin"></div>
+    <p>Loading D3 &amp; SL4 data from TfL…</p>
+    <small>Fetching stops, routes &amp; live positions</small>
+  </div>
+
+  <!-- Side panel -->
+  <div id="panel">
+    <div id="panel-top">
+      <div class="panel-title-row">
+        <span>🚌 Active Buses</span>
+        <span class="total-badge" id="total-badge">0 total</span>
+      </div>
+      <div id="filters">
+        <div class="ftab f-all active" id="ft-all" onclick="setFilter('all')">All</div>
+        <div class="ftab f-d3" id="ft-d3" onclick="setFilter('d3')">D3</div>
+        <div class="ftab f-sl4" id="ft-sl4" onclick="setFilter('sl4')">SL4</div>
+      </div>
+    </div>
+    <div id="bus-list">
+      <div class="empty">Loading…</div>
+    </div>
+  </div>
+
+  <!-- Legend -->
+  <div id="legend">
+    <div class="lhdr">Legend</div>
+    <div class="lr"><div class="li" style="background:var(--d3)"></div>   D3 — Inbound</div>
+    <div class="lr"><div class="li" style="background:var(--d3-dark)"></div> D3 — Outbound</div>
+    <div class="lr"><div class="li" style="background:var(--sl4)"></div>  SL4 — Inbound</div>
+    <div class="lr"><div class="li" style="background:var(--sl4-dark)"></div>SL4 — Outbound</div>
+    <div class="lr"><div class="si" style="background:#ffcc00"></div> D3 Stop</div>
+    <div class="lr"><div class="si" style="background:#80cbc4"></div> SL4 Stop</div>
+  </div>
+</div>
+
+<script>
+/* ================================================================
+   D3 + SL4 Live Bus Tracker — TfL Unified API
+   ► Positions interpolated between stops via route sequence
+   ► No API key required for basic/demo usage
+   ► Auto-refreshes every 30 seconds
+   ================================================================ */
+
+const TFL  = 'https://api.tfl.gov.uk';
+const TICK = 30_000;
+
+// ── Route definitions ─────────────────────────────────────────────
+const CFG = {
+  d3: {
+    id:       'd3',
+    label:    'D3',
+    colorIn:  '#e32017',
+    colorOut: '#9b1c1c',
+    stopCol:  '#ffcc00'
+  },
+  sl4: {
+    id:       'sl4',
+    label:    'SL4',
+    colorIn:  '#00b2a9',
+    colorOut: '#007b74',
+    stopCol:  '#80cbc4'
+  }
+};
+
+// ── Per-route mutable state ───────────────────────────────────────
+const RS = {
+  d3:  { stops: {}, seq: { inbound: [], outbound: [] }, stopMkrs: {}, lines: [] },
+  sl4: { stops: {}, seq: { inbound: [], outbound: [] }, stopMkrs: {}, lines: [] }
+};
+
+let map;
+let busMkrs     = {};    // key: `${routeId}::${vehicleId}`
+let curFilter   = 'all';
+let snapshot    = [];    // last rendered bus list
+
+// ── Clock ─────────────────────────────────────────────────────────
+(function tick() {
+  document.getElementById('clock').textContent = new Date().toLocaleTimeString('en-GB');
+  setTimeout(tick, 1000);
+})();
+
+// ── Map initialisation ────────────────────────────────────────────
+function initMap() {
+  map = L.map('map', {
+    center: [51.49, -0.15],
+    zoom: 10,
+    zoomControl: false
+  });
+  L.control.zoom({ position: 'bottomright' }).addTo(map);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; OpenStreetMap &copy; CARTO | TfL Open Data',
+    subdomains: 'abcd',
+    maxZoom: 19
+  }).addTo(map);
+}
+
+// ── Leaflet icon factories ────────────────────────────────────────
+function mkBusIcon(routeId, dir) {
+  const c = CFG[routeId];
+  const bg = dir === 'inbound' ? c.colorIn : c.colorOut;
+  return L.divIcon({
+    className: '',
+    html: `<div style="background:${bg};color:#fff;font-weight:800;font-size:11px;
+             padding:4px 8px;border-radius:6px;
+             border:2px solid rgba(255,255,255,.75);
+             box-shadow:0 3px 14px rgba(0,0,0,.8);
+             white-space:nowrap;cursor:pointer;
+             text-shadow:0 1px 2px rgba(0,0,0,.5);">🚌 ${c.label}</div>`,
+    iconSize: [58, 30],
+    iconAnchor: [29, 15]
+  });
+}
+
+function mkStopIcon(routeId) {
+  const col = CFG[routeId].stopCol;
+  return L.divIcon({
+    className: '',
+    html: `<div style="width:9px;height:9px;background:${col};
+             border:2px solid #444;border-radius:50%;
+             box-shadow:0 1px 5px rgba(0,0,0,.55);"></div>`,
+    iconSize: [9, 9], iconAnchor: [4, 4]
+  });
+}
+
+// ── TfL fetch wrapper ─────────────────────────────────────────────
+async function tfl(path) {
+  const r = await fetch(TFL + path);
+  if (!r.ok) throw new Error(`HTTP ${r.status} — ${path}`);
+  return r.json();
+}
+
+// ── Load static route data (stops + sequence + polylines) ─────────
+async function loadRoute(id) {
+  const rs = RS[id];
+  const cf = CFG[id];
+
+  // 1. Stop points
+  try {
+    const stops = await tfl(`/Line/${id}/StopPoints`);
+    stops.forEach(s => {
+      rs.stops[s.naptanId] = { id: s.naptanId, lat: s.lat, lon: s.lon, name: s.commonName };
+    });
+  } catch (e) { console.warn(`[${id}] stops failed:`, e.message); }
+
+  // 2. Route sequence → polylines + richer stop data
+  try {
+    const data = await tfl(`/Line/${id}/Route/Sequence/all`);
+
+    (data.stopPointSequences || []).forEach(seg => {
+      const dir = seg.direction;
+      if (!rs.seq[dir]) rs.seq[dir] = [];
+      const pts = (seg.stopPoint || []).filter(p => p.lat && p.lon);
+      if (pts.length > rs.seq[dir].length) {
+        rs.seq[dir] = pts.map(p => ({
+          id: p.id, name: p.name || p.commonName, lat: p.lat, lon: p.lon
+        }));
+        pts.forEach(p => {
+          rs.stops[p.id] ??= { id: p.id, lat: p.lat, lon: p.lon, name: p.name || p.commonName };
+        });
+      }
+    });
+
+    // Draw polylines
+    rs.lines.forEach(l => map.removeLayer(l));
+    rs.lines = [];
+    (data.stopPointSequences || []).forEach(seg => {
+      const coords = (seg.stopPoint || [])
+        .filter(p => p.lat && p.lon).map(p => [p.lat, p.lon]);
+      if (coords.length < 2) return;
+      const color = seg.direction === 'inbound' ? cf.colorIn : cf.colorOut;
+      const pl = L.polyline(coords, {
+        color, weight: 3.5, opacity: 0.55,
+        dashArray: seg.direction === 'inbound' ? null : '8 5'
+      }).addTo(map);
+      rs.lines.push(pl);
+    });
+
+  } catch (e) { console.warn(`[${id}] sequence failed:`, e.message); }
+
+  // 3. Draw stop markers
+  Object.values(rs.stops).forEach(s => {
+    if (rs.stopMkrs[s.id] || !s.lat) return;
+    const m = L.marker([s.lat, s.lon], { icon: mkStopIcon(id), zIndexOffset: 100 })
+      .addTo(map)
+      .bindPopup(
+        `<div style="color:#333;font-size:13px;">
+           <strong>${s.name}</strong><br>
+           <small style="color:#777">${s.id}</small><br>
+           <small style="color:#999">Route ${cf.label}</small>
+         </div>`,
+        { maxWidth: 200 }
+      );
+    rs.stopMkrs[s.id] = m;
+  });
+}
+
+// ── Position interpolation ────────────────────────────────────────
+// Estimates bus location between previous and next stop
+// based on timeToStation (assumes ~3 min max between consecutive stops)
+function interpPos(routeId, nextId, dir, tts) {
+  const rs  = RS[routeId];
+  const seq = rs.seq[dir] ?? rs.seq['outbound'];
+  const idx = seq.findIndex(s => s.id === nextId);
+
+  const fallback = rs.stops[nextId];
+  if (!fallback) return null;
+  if (idx <= 0)  return { lat: fallback.lat, lon: fallback.lon };
+
+  const prev = seq[idx - 1];
+  const next = seq[idx];
+  if (!prev?.lat || !next?.lat) return { lat: fallback.lat, lon: fallback.lon };
+
+  const frac = Math.max(0, Math.min(1, 1 - tts / 180));
+  return {
+    lat: prev.lat + (next.lat - prev.lat) * frac,
+    lon: prev.lon + (next.lon - prev.lon) * frac
+  };
+}
+
+// ── Fetch live buses for one route ────────────────────────────────
+async function fetchBuses(routeId) {
+  const rs  = RS[routeId];
+  const arr = await tfl(`/Line/${routeId}/Arrivals`);
+  if (!arr.length) return [];
+
+  const byVehicle = {};
+  arr.forEach(a => (byVehicle[a.vehicleId] ??= []).push(a));
+
+  return Object.entries(byVehicle).flatMap(([vid, preds]) => {
+    preds.sort((a, b) => a.timeToStation - b.timeToStation);
+    const nxt = preds[0];
+    if (!nxt) return [];
+
+    const pos = interpPos(routeId, nxt.naptanId, nxt.direction, nxt.timeToStation);
+    if (!pos) return [];
+
+    return [{
+      routeId,
+      vid,
+      key:      `${routeId}::${vid}`,
+      lat:      pos.lat,
+      lon:      pos.lon,
+      nextStop: rs.stops[nxt.naptanId]?.name || nxt.stationName,
+      nextId:   nxt.naptanId,
+      tts:      nxt.timeToStation,
+      mins:     Math.round(nxt.timeToStation / 60),
+      dir:      nxt.direction,
+      dest:     nxt.destinationName || nxt.towards || '',
+      curLoc:   nxt.currentLocation || '',
+      upcoming: preds.slice(0, 4)
+    }];
+  });
+}
+
+// ── Main update loop ──────────────────────────────────────────────
+async function update() {
+  try {
+    const [d3, sl4] = await Promise.all([
+      fetchBuses('d3') .catch(e => { console.warn('D3:',  e.message); return []; }),
+      fetchBuses('sl4').catch(e => { console.warn('SL4:', e.message); return []; })
+    ]);
+
+    const all = [...d3, ...sl4];
+    snapshot = all;
+
+    // Update header counts
+    document.getElementById('cnt-d3').textContent  = d3.length;
+    document.getElementById('cnt-sl4').textContent = sl4.length;
+    document.getElementById('total-badge').textContent =
+      `${all.length} total`;
+
+    renderMarkers(all);
+    renderPanel(all);
+    setStatus(true,
+      `D3: ${d3.length} bus${d3.length!==1?'es':''} · ` +
+      `SL4: ${sl4.length} bus${sl4.length!==1?'es':''}`
+    );
+    hideOverlay();
+
+  } catch (err) {
+    console.error('Update failed:', err);
+    setStatus(false, 'TfL API error — retrying in 30 s');
+    hideOverlay();
+  }
+}
+
+// ── Render Leaflet markers ────────────────────────────────────────
+function renderMarkers(buses) {
+  const active = new Set(buses.map(b => b.key));
+
+  Object.keys(busMkrs).forEach(k => {
+    if (!active.has(k)) { map.removeLayer(busMkrs[k]); delete busMkrs[k]; }
+  });
+
+  buses.forEach(b => {
+    const icon = mkBusIcon(b.routeId, b.dir);
+    const pop  = buildPopup(b);
+
+    if (busMkrs[b.key]) {
+      busMkrs[b.key].setLatLng([b.lat, b.lon]).setIcon(icon);
+      busMkrs[b.key].getPopup()?.setContent(pop);
+    } else {
+      const m = L.marker([b.lat, b.lon], { icon, zIndexOffset: 1000 })
+        .addTo(map).bindPopup(pop, { maxWidth: 275 });
+      m.on('click', () => flashCard(b.key));
+      busMkrs[b.key] = m;
+    }
+  });
+}
+
+function buildPopup(b) {
+  const cf      = CFG[b.routeId];
+  const bg      = b.dir === 'inbound' ? cf.colorIn : cf.colorOut;
+  const etaClr  = b.tts < 60 ? '#f85149' : b.tts < 120 ? '#e3b341' : '#3fb950';
+  const rs      = RS[b.routeId];
+
+  const stopRows = b.upcoming.map((p, i) => {
+    const name = rs.stops[p.naptanId]?.name || p.stationName;
+    const m    = Math.round(p.timeToStation / 60);
+    return `<div class="ps" style="${i===0?'font-weight:600':'color:#8b949e'}">
+      ${i===0?'&#8594;':'&middot;'} ${name}
+      <span style="color:${etaClr}">${m===0?'Due':m+' min'}</span>
+    </div>`;
+  }).join('');
+
+  return `<div>
+    <div class="pt">
+      <span style="background:${bg};color:#fff;font-size:11px;font-weight:800;
+        padding:2px 8px;border-radius:4px;">${cf.label}</span>
+      Bus ${b.vid}
+    </div>
+    <div class="pr">Towards: <b>${b.dest || '—'}</b></div>
+    <div class="pr">Direction: <b style="text-transform:capitalize">${b.dir}</b></div>
+    ${b.curLoc ? `<div class="pr">Location: <b style="color:#58a6ff">${b.curLoc}</b></div>` : ''}
+    <div class="psh">Upcoming stops</div>
+    ${stopRows}
+  </div>`;
+}
+
+// ── Render side panel ─────────────────────────────────────────────
+function renderPanel(buses) {
+  const filtered = curFilter === 'all'
+    ? buses
+    : buses.filter(b => b.routeId === curFilter);
+
+  const list = document.getElementById('bus-list');
+
+  if (!filtered.length) {
+    const what = curFilter === 'all'
+      ? 'No buses currently active.'
+      : `No ${curFilter.toUpperCase()} buses right now.`;
+    list.innerHTML = `<div class="empty">${what}<small>Service may not be running at this time.</small></div>`;
+    return;
+  }
+
+  // Sort: by route, then direction, then ETA
+  const sorted = [...filtered].sort((a, b) => {
+    if (a.routeId !== b.routeId) return a.routeId < b.routeId ? -1 : 1;
+    if (a.dir     !== b.dir)     return a.dir === 'inbound' ? -1 : 1;
+    return a.tts - b.tts;
+  });
+
+  let html = '', lastRoute = null;
+  sorted.forEach(b => {
+    // Section divider when showing all routes
+    if (curFilter === 'all' && b.routeId !== lastRoute) {
+      const cf = CFG[b.routeId];
+      html += `<div class="sdiv">
+        <div class="sdiv-line" style="background:${cf.colorIn}"></div>
+        <span>${cf.label} Buses</span>
+        <div class="sdiv-line" style="background:${cf.colorIn}"></div>
+      </div>`;
+      lastRoute = b.routeId;
+    }
+    html += buildCard(b);
+  });
+
+  list.innerHTML = html;
+}
+
+function buildCard(b) {
+  const cf  = CFG[b.routeId];
+  const dc  = `${b.dir === 'inbound' ? 'in' : 'out'}-${b.routeId}`;
+  const dl  = b.dir === 'inbound' ? '↙ In' : '↗ Out';
+
+  let etaTxt, etaCls;
+  if      (b.tts < 60)  { etaTxt = '⏰ Due now';         etaCls = 'eta-due';  }
+  else if (b.tts < 120) { etaTxt = `⚡ ${b.mins} min`;   etaCls = 'eta-soon'; }
+  else                  { etaTxt = `🕐 ${b.mins} min`;   etaCls = 'eta-ok';   }
+
+  return `
+    <div class="card ${b.routeId}-card" id="c-${b.key}"
+         onclick="flyTo('${b.key}',${b.lat},${b.lon})">
+      <div class="card-top">
+        <div class="card-id-row">
+          <span class="rbadge rb-${b.routeId}">${cf.label}</span>
+          <span class="vid">${b.vid}</span>
+        </div>
+        <span class="dbadge ${dc}">${dl}</span>
+      </div>
+      <div class="cdest">&#8594; ${b.dest || '—'}</div>
+      <div class="cstop">📍 ${b.nextStop || 'Unknown stop'}</div>
+      <div class="ceta ${etaCls}">${etaTxt} to next stop</div>
+      ${b.curLoc ? `<div class="cloc">${b.curLoc}</div>` : ''}
+    </div>`;
+}
+
+// ── Filter tabs ───────────────────────────────────────────────────
+function setFilter(f) {
+  curFilter = f;
+  ['all','d3','sl4'].forEach(id => {
+    const el = document.getElementById(`ft-${id}`);
+    el.className = `ftab f-${id}${id === f ? ' active' : ''}`;
+  });
+  renderPanel(snapshot);
+}
+
+// ── Map helpers ───────────────────────────────────────────────────
+function flyTo(key, lat, lon) {
+  map.flyTo([lat, lon], 16, { duration: 1.1 });
+  setTimeout(() => busMkrs[key]?.openPopup(), 1200);
+}
+
+function flashCard(key) {
+  const el = document.getElementById(`c-${key}`);
+  if (!el) return;
+  el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  const routeId = key.startsWith('sl4') ? 'sl4' : 'd3';
+  const col = CFG[routeId].colorIn;
+  el.style.borderColor = col;
+  el.style.boxShadow   = `0 0 0 1px ${col}`;
+  setTimeout(() => { el.style.borderColor = ''; el.style.boxShadow = ''; }, 2500);
+}
+
+// ── Status / overlay ──────────────────────────────────────────────
+function setStatus(ok, msg) {
+  document.getElementById('dot').className     = 'dot' + (ok ? '' : ' err');
+  document.getElementById('stxt').textContent  = msg;
+  if (ok) document.getElementById('upd').textContent = new Date().toLocaleTimeString('en-GB');
+}
+
+function hideOverlay() {
+  const ov = document.getElementById('ov');
+  if (ov) ov.style.display = 'none';
+}
+
+// ── Bootstrap ─────────────────────────────────────────────────────
+(async function init() {
+  initMap();
+
+  // Load both routes in parallel
+  await Promise.allSettled([
+    loadRoute('d3'),
+    loadRoute('sl4')
+  ]);
+
+  // Fit map bounds to show all loaded polylines
+  const allLines = [...RS.d3.lines, ...RS.sl4.lines];
+  if (allLines.length) {
+    try {
+      map.fitBounds(L.featureGroup(allLines).getBounds().pad(0.07));
+    } catch(_) {}
+  }
+
+  // First data fetch, then start interval
+  await update();
+  setInterval(update, TICK);
+})();
+</script>
+
+</body></html>
